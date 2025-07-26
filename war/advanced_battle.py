@@ -166,10 +166,13 @@ class Unit:
         while q:
             cur = q.popleft()
             if cur in goals:
-                # reconstruct
-                while came[cur] != start:
+                # reconstruct path back to start
+                if cur == start:
+                    return None  # already at goal; no movement needed
+                # walk back until we reach the tile adjacent to start
+                while came[cur] is not None and came[cur] != start:
                     cur = came[cur]
-                return cur  # first step
+                return cur  # first step (may be directly the goal if adjacent)
             for nx, ny in neighbors(cur):
                 if (nx, ny) in came:
                     continue
