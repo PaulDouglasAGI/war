@@ -67,6 +67,7 @@ class Unit:
         self.symbol = symbol
         self.base_hp = 100
         self.hp = self.base_hp
+        self.max_hp = self.base_hp
         self.base_dmg = 10
         self.dmg = self.base_dmg
         self.move_cd = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX)
@@ -74,11 +75,29 @@ class Unit:
         self.kills = 0
         self.xp = 0
         self.is_elite = False
+        # Morale & supply
+        self.morale = 100
+        self.unsupplied = False
 
     def _reset_cd(self):
-        self.move_cd = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX)
+        global current_weather
+        penalty = 2 if current_weather == 'rain' else 1
+        self.move_cd = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX) * penalty
 
     def attempt_move(self, units):
+        # Morale based hesitation and fleeing
+        if self.morale < 20:
+            # flee: move opposite direction of enemy HQ (along x axis)
+            dx = -1 if self.team == 'blue' else 1
+            target_x = self.x + dx
+            if 0 <= target_x < WIDTH:
+                trail[(self.x, self.y)] = TRAIL_FADE
+                self.x = target_x
+                self._reset_cd()
+            return
+        elif self.morale < 30 and random.random() < 0.5:
+            # hesitation skip move
+            return
         if self.move_cd > 0:
             self.move_cd -= 1
             return
@@ -113,6 +132,7 @@ class Unit:
                 if u.hp <= 0:
                     log.append(f"{u.describe()} was destroyed")
                     units.remove(u)
+                    apply_nearby_death_morale(u)
                     kills[self.team] += 1
                     print('\a', end='')  # beep on kill
                     # XP gain
@@ -272,6 +292,97 @@ def check_hq_status(frame, log):
                     return True
     return False
 
+# ===================== WEATHER SYSTEM ==================================
+
+WEATHER_EVENTS = ['rain', 'fog', 'storm']
+current_weather = 'clear'
+weather_timer = 0  # remaining frames for current event
+next_weather_in = random.randint(FPS * 30, FPS * 60)  # frames until next event
+
+def update_weather(frame, log):
+    global current_weather, weather_timer, next_weather_in
+
+    if current_weather == 'clear':
+        if frame >= next_weather_in:
+            current_weather = random.choice(WEATHER_EVENTS)
+            weather_timer = FPS * 10  # 10 seconds
+            next_weather_in = frame + random.randint(FPS * 30, FPS * 60)
+            log.append(f"Weather changed to {current_weather.upper()}")
+    else:
+        weather_timer -= 1
+        if weather_timer <= 0:
+            log.append("Weather cleared")
+            current_weather = 'clear'
+            weather_timer = 0
+
+# ===================== MORALE & SUPPLY ==================================
+
+def adjacent_coords(x, y):
+    for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+        nx, ny = x+dx, y+dy
+        if 0<=nx<WIDTH and 0<=ny<HEIGHT:
+            yield nx, ny
+
+def update_morale():
+    # For each unit compute morale adjustments
+    unit_at = defaultdict(list)
+    for u in units:
+        unit_at[(u.x, u.y)].append(u)
+
+    for u in units:
+        delta = 0
+        allies_adj = 0
+        enemies_adj = 0
+        for nx, ny in adjacent_coords(u.x, u.y):
+            for other in unit_at.get((nx, ny), []):
+                if other.team == u.team:
+                    allies_adj += 1
+                else:
+                    enemies_adj += 1
+        delta += allies_adj * 5
+        delta -= enemies_adj * 3
+        # cap
+        if u.unsupplied:
+            delta = min(delta, 0)  # cannot gain morale while unsupplied
+        if delta:
+            u.morale = max(0, min(100, u.morale + delta))
+
+        # hesitation/flee flags handled in movement
+
+def apply_nearby_death_morale(dead_unit):
+    for u in units:
+        if abs(u.x - dead_unit.x) + abs(u.y - dead_unit.y) == 1 and u.team == dead_unit.team:
+            u.morale = max(0, u.morale - 10)
+
+def update_supply_status(frame):
+    # BFS from HQs through owned tiles or units to mark supplied
+    supplied_tiles = {'blue': set(), 'red': set()}
+
+    for team in ('blue','red'):
+        hq_pos = HQ_POS[team]
+        queue=[hq_pos]
+        visited = set(queue)
+        while queue:
+            cx, cy = queue.pop()
+            supplied_tiles[team].add((cx, cy))
+            for nx, ny in adjacent_coords(cx, cy):
+                if (nx, ny) in visited:
+                    continue
+                # allowed traverse if tile controlled by team OR has friendly unit
+                if control_map[ny][nx]==team or any(u.x==nx and u.y==ny and u.team==team for u in units):
+                    visited.add((nx, ny))
+                    queue.append((nx, ny))
+
+    # Mark units
+    for u in units:
+        if (u.x, u.y) in supplied_tiles[u.team]:
+            u.unsupplied=False
+        else:
+            u.unsupplied=True
+            # attrition once per second
+            if frame % FPS ==0:
+                u.hp -= 1
+
 # ===================== RENDERING =======================================
 
 def clear_screen():
@@ -290,6 +401,14 @@ def render(frame):
     clear_screen()
     print(TOP_BORDER)
     print(MID_LABELS)
+
+    # Weather status line
+    if current_weather == 'clear':
+        weather_str = 'Clear'
+    else:
+        icon = {'rain':'🌧','fog':'🌫','storm':'🌩'}.get(current_weather,'?')
+        weather_str = f"{icon} {current_weather.capitalize()} ({weather_timer//FPS}s remaining)"
+    print(f"WEATHER: {weather_str}")
 
     # Build grid lines
     cell_strings = [[' ' for _ in range(WIDTH)] for _ in range(HEIGHT)]
@@ -365,7 +484,7 @@ try:
         if frame % FPS == 0 and frame != 0:
             for team in ('blue', 'red'):
                 resources[team] += 1
-                if resources[team] >= 3:
+                if resources[team] >= 3 and current_weather != 'storm':
                     spawn_unit(team)
                     resources[team] -= 3
         # === unit logic ===
@@ -376,6 +495,16 @@ try:
         # === systems ===
         update_control_map(frame)
         award_control_resources(frame)
+        update_weather(frame, attack_log) # Update weather
+        update_morale() # Update morale
+        update_supply_status(frame) # Update supply status
+
+        for u in units[:]:
+            if u.hp <= 0:
+                attack_log.append(f"{u.describe()} died from attrition")
+                units.remove(u)
+                apply_nearby_death_morale(u)
+                kills[('red' if u.team=='blue' else 'blue')] += 1
         game_over = check_hq_status(frame, attack_log)
         if game_over:
             winner = 'TEAM A' if hq_hp['red'] <= 0 else 'TEAM B'
@@ -387,9 +516,10 @@ try:
             # Compute visibility for fog (viewer perspective = both teams for now)
             visible = set()
             for u in units:
-                for dx in range(-FOG_RADIUS, FOG_RADIUS + 1):
-                    for dy in range(-FOG_RADIUS, FOG_RADIUS + 1):
-                        if abs(dx) + abs(dy) <= FOG_RADIUS:
+                radius = FOG_RADIUS - 2 if current_weather == 'fog' else FOG_RADIUS
+                for dx in range(-radius, radius + 1):
+                    for dy in range(-radius, radius + 1):
+                        if abs(dx) + abs(dy) <= radius:
                             vx, vy = u.x + dx, u.y + dy
                             if 0 <= vx < WIDTH and 0 <= vy < HEIGHT:
                                 visible.add((vx, vy))
