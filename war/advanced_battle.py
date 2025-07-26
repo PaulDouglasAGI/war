@@ -162,6 +162,9 @@ class Unit:
         # Siege counter for HQ capture
         self.hq_counter = 0
 
+        # Attack cooldown
+        self.attack_cd = 0
+
     # ---------- Pathfinding ---------------
     def bfs(self, goals, units):
         """Simple BFS avoiding walls and other units. goals is set of (x,y). Returns next step or None"""
@@ -222,6 +225,8 @@ class Unit:
     # ---------- Update per frame -----------
     def update(self, frame, units, hqs, visible_map):
         # Global movement cooldown pacing
+        if self.attack_cd > 0:
+            self.attack_cd -= 1
         if self.move_cd > 0:
             self.move_cd -= 1
             # Even while waiting we can still attack if someone stands on us
@@ -271,12 +276,20 @@ class Unit:
         self.x, self.y = nx, ny
 
     def attack(self, units, hqs, frame):
-        # Attack unit on same tile
-        for u in units:
-            if u.team != self.team and u.x == self.x and u.y == self.y:
+        # Attack adjacent (Manhattan distance <=1), subject to cooldown
+        if self.attack_cd > 0:
+            return False
+
+        for u in units[:]:
+            if u.team == self.team:
+                continue
+            if abs(u.x - self.x) + abs(u.y - self.y) <= 1:
                 u.hp -= self.dmg
+                print(f"Unit {self.uid} attacked {u.uid} for {self.dmg}. Target HP {u.hp}")
                 log_event(frame, self, "attack")
+                self.attack_cd = 5  # cooldown frames
                 if u.hp <= 0:
+                    print(f"Unit {u.uid} has been defeated.")
                     log_event(frame, u, "death")
                     units.remove(u)
                 return True
