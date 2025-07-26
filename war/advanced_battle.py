@@ -169,6 +169,9 @@ class Unit:
         # Movement timing (spawn delay and pacing)
         self.move_cd = random.randint(10, 20)  # initial delay 10-20 frames
 
+        # Terrain slow-down timer
+        self.cooldown = 0
+
         # Siege counter for HQ capture
         self.hq_counter = 0
 
