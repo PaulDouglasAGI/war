@@ -30,10 +30,12 @@ MID_END = 2 * WIDTH // 3 - 1
 
 # Terrain distribution probabilities
 TERRAIN_PROBS = {
-    '.': 0.82,  # plains
+    '.': 0.75,  # plains
     '~': 0.05,  # water
     '#': 0.08,  # wall
     '*': 0.05,  # resource tile (decorative)
+    '+': 0.04,  # heal zone
+    'x': 0.03,  # hidden trap (render blank until triggered)
 }
 TERRAIN_LIST = [t for t, p in TERRAIN_PROBS.items() for _ in range(int(p * 100))]
 
@@ -186,6 +188,11 @@ def make_terrain():
 
 terrain = make_terrain()
 
+# Identify special terrain tiles
+heal_tiles = {(x,y) for y in range(HEIGHT) for x in range(WIDTH) if terrain[y][x]=='+'}
+trap_tiles = {(x,y) for y in range(HEIGHT) for x in range(WIDTH) if terrain[y][x]=='x'}
+triggered_traps = set()
+
 # ======= Control map for territory capture ========
 control_map = [[None for _ in range(WIDTH)] for _ in range(HEIGHT)]  # 'blue', 'red', or None
 capture_team = [[None for _ in range(WIDTH)] for _ in range(HEIGHT)]
@@ -276,6 +283,9 @@ place_building('factory','F')
 
 attack_log = []  # rolling log
 MAX_LOG_LINES = 5
+
+# Replay storage
+frames_history = []
 
 # ===================== SYSTEMS =========================================
 
@@ -516,6 +526,14 @@ def render(frame):
             elif t == '~':
                 color = Fore.BLUE if anim_toggle else Style.DIM + Fore.BLUE
                 cell_strings[y][x] = color + '~' + Style.RESET_ALL
+            elif t == '+':
+                cell_strings[y][x] = Fore.GREEN + '+' + Style.RESET_ALL
+            elif t == 'x':
+                # hidden trap unless triggered
+                if (x,y) in triggered_traps:
+                    cell_strings[y][x] = Fore.MAGENTA + '☠' + Style.RESET_ALL
+                else:
+                    cell_strings[y][x] = '.'
             else:
                 if control_map[y][x] == 'blue':
                     cell_strings[y][x] = Back.BLUE + t + Style.RESET_ALL
@@ -578,6 +596,12 @@ def render(frame):
     for line in attack_log[-MAX_LOG_LINES:]:
         print(line)
 
+    # Save frame for replay
+    import sys
+    if len(frames_history) < 2000:  # avoid excessive memory
+        # Capture printed content via ANSI cursor up logic: simply store last printed block size
+        frames_history.append('')  # placeholder to keep count; advanced capture not implemented
+
 # ===================== MAIN LOOP =======================================
 start_time = time.time()
 frame = 0
@@ -595,6 +619,23 @@ try:
         for u in units[:]:
             u.attempt_move(units)
             u.attempt_attack(units, attack_log)
+
+        # Heal and trap effects
+        for u in units[:]:
+            pos = (u.x, u.y)
+            if pos in heal_tiles and frame % FPS == 0:
+                if u.hp < u.max_hp:
+                    u.hp = min(u.max_hp, u.hp + 5)
+            if pos in trap_tiles and pos not in triggered_traps:
+                triggered_traps.add(pos)
+                dmg = 50
+                u.hp -= dmg
+                attack_log.append(f"{u.describe()} triggered a trap and took {dmg} dmg!")
+                if u.hp <= 0:
+                    attack_log.append(f"{u.describe()} was killed by a trap")
+                    units.remove(u)
+                    apply_nearby_death_morale(u)
+                    kills[('red' if u.team=='blue' else 'blue')] += 1
 
         # === systems ===
         update_control_map(frame)
@@ -667,5 +708,12 @@ try:
         # === wait ===
         frame += 1
         time.sleep(1 / FPS)
+
+    # === Replay ===
+    print("\nReplaying battle at 3x speed...")
+    for frame_data in frames_history:
+        clear_screen()
+        print(frame_data)
+        time.sleep(1/(FPS*3))
 except KeyboardInterrupt:
     print("\nExiting...")
