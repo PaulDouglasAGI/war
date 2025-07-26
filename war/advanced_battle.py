@@ -156,6 +156,12 @@ class Unit:
         self.cost = UNIT_TYPES[u_type]["cost"]
         self.cooldown = 0  # forest delay, etc.
 
+        # Movement timing (spawn delay and pacing)
+        self.move_cd = random.randint(10, 20)  # initial delay 10-20 frames
+
+        # Siege counter for HQ capture
+        self.hq_counter = 0
+
     # ---------- Pathfinding ---------------
     def bfs(self, goals, units):
         """Simple BFS avoiding walls and other units. goals is set of (x,y). Returns next step or None"""
@@ -183,7 +189,8 @@ class Unit:
                     continue
                 came[(nx, ny)] = cur
                 q.append((nx, ny))
-        return None
+        # No path found
+        return start
 
     # ---------- Behavior Tree -------------
     def decide_target(self, units, visible_enemies, hqs, team_units):
@@ -214,6 +221,12 @@ class Unit:
 
     # ---------- Update per frame -----------
     def update(self, frame, units, hqs, visible_map):
+        # Global movement cooldown pacing
+        if self.move_cd > 0:
+            self.move_cd -= 1
+            # Even while waiting we can still attack if someone stands on us
+            self.attack(units, hqs, frame)
+            return
         if self.cooldown > 0:
             self.cooldown -= 1
             return
@@ -221,7 +234,13 @@ class Unit:
         visible_enemies = [u for u in units if u.team != self.team and (u.x, u.y) in visible_map[self.team]]
         team_units = [u for u in units if u.team == self.team]
 
-        target_obj = self.decide_target(units, visible_enemies, hqs, team_units)
+        # Priority: engage enemy within 5 tiles if any visible
+        close_enemies = [e for e in visible_enemies if manhattan((self.x,self.y),(e.x,e.y))<=5]
+        if close_enemies:
+            target_obj = min(close_enemies, key=lambda e: manhattan((self.x,self.y),(e.x,e.y)))
+        else:
+            target_obj = self.decide_target(units, visible_enemies, hqs, team_units)
+
         if isinstance(target_obj, Unit):
             target_pos = {(target_obj.x, target_obj.y)}
         else:  # HQ
@@ -230,13 +249,15 @@ class Unit:
         # Pathfinding / movement
         for _ in range(self.speed):  # Scouts move twice
             step = self.bfs(target_pos, units)
-            if step:
+            if step and step != (self.x, self.y):
                 if any(u.x == step[0] and u.y == step[1] for u in units):
                     # Next tile is occupied; wait this turn
                     # Optional debug
                     # print(f"[{self.team}] Unit at {(self.x,self.y)} path blocked at {step}")
                     break
                 self.move_to(*step, frame)
+                print(f"[{self.team}] Unit {self.uid} moved to {(self.x,self.y)} cd reset")
+                self.move_cd = random.randint(10,20)
             # Attack if on same tile
             attacked = self.attack(units, hqs, frame)
             if attacked:
@@ -262,8 +283,15 @@ class Unit:
         # Attack HQ
         enemy_hq = hqs["red" if self.team == "blue" else "blue"]
         if (self.x, self.y) in enemy_hq.tiles():
-            enemy_hq.hp -= self.dmg
-            log_event(frame, self, "attack_hq")
+            self.hq_counter += 1
+            print(f"[{self.team}] Unit {self.uid} sieging HQ {self.hq_counter}/3")
+            if self.hq_counter >= 3:
+                enemy_hq.hp -= self.dmg
+                self.hq_counter = 0
+                print(f"[{self.team}] Unit {self.uid} damaged enemy HQ for {self.dmg}")
+                log_event(frame, self, "attack_hq")
+        else:
+            self.hq_counter = 0
         return False
 
     def draw(self):
