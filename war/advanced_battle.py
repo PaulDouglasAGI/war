@@ -26,6 +26,13 @@ UNIT_TYPES = {
     "Infantry": {"hp": 100, "dmg": 10, "speed": 1, "cost": 3},
     "Tank":     {"hp": 200, "dmg": 20, "speed": 1, "cost": 5},  # slow but strong
     "Scout":    {"hp": 60,  "dmg": 5,  "speed": 2, "cost": 2},  # fast but weak
+
+    # Support units
+    "Shieldbearer": {"hp": 120, "dmg": 6, "speed": 1, "cost": 4},
+    "Medic":        {"hp": 80,  "dmg": 3, "speed": 1, "cost": 4},
+    "BarrierEng":   {"hp": 90,  "dmg": 4, "speed": 1, "cost": 5},
+    "RepairBot":    {"hp": 70,  "dmg": 2, "speed": 1, "cost": 4},
+    "Spotter":      {"hp": 60,  "dmg": 4, "speed": 1, "cost": 3},
 }
 
 TEAM_COLORS = {
@@ -154,7 +161,10 @@ class Unit:
         self.dmg = UNIT_TYPES[u_type]["dmg"]
         self.speed = UNIT_TYPES[u_type]["speed"]
         self.cost = UNIT_TYPES[u_type]["cost"]
-        self.cooldown = 0  # forest delay, etc.
+        # Special mechanics flags
+        self.dmg_reduction = 0.0  # set by Shieldbearer aura
+        self.last_heal_frame = 0  # for Medic
+        self.barrier_cd = FPS * 5 # for Barrier Engineer
 
         # Movement timing (spawn delay and pacing)
         self.move_cd = random.randint(10, 20)  # initial delay 10-20 frames
@@ -268,6 +278,43 @@ class Unit:
             if attacked:
                 break  # stop after attack
 
+        # ===== Support abilities =====
+        if self.u_type == "Shieldbearer":
+            for ally in units:
+                if ally.team == self.team and ally is not self and manhattan((ally.x,ally.y),(self.x,self.y))<=2:
+                    ally.dmg_reduction = max(ally.dmg_reduction, 0.5)
+
+        elif self.u_type == "Medic":
+            if frame - self.last_heal_frame >= FPS:  # heal every second (60 frames)
+                for ally in units:
+                    if ally.team == self.team and ally.hp < ally.max_hp and manhattan((ally.x,ally.y),(self.x,self.y))<=2:
+                        ally.hp = min(ally.max_hp, ally.hp+1)
+                        print(f"Medic {self.uid} healed {ally.uid} to {ally.hp}")
+                self.last_heal_frame = frame
+
+        elif self.u_type == "BarrierEng":
+            if frame % (FPS*5) == 0:
+                # pick adjacent tile towards enemy side
+                dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+                random.shuffle(dirs)
+                for dx,dy in dirs:
+                    tx,ty = self.x+dx, self.y+dy
+                    if in_bounds((tx,ty)) and terrain[ty][tx]==OPEN and not any(u.x==tx and u.y==ty for u in units):
+                        terrain[ty][tx]=WALL
+                        print(f"Barrier Engineer {self.uid} placed wall at {(tx,ty)}")
+                        break
+
+        elif self.u_type == "RepairBot":
+            if frame % FPS ==0:
+                for hq in hqs.values():
+                    if manhattan((hq.x,hq.y),(self.x,self.y))<=2:
+                        hq.hp = min(HQ_HP, hq.hp+2)
+                        print(f"RepairBot {self.uid} repairs HQ {hq.team} to {hq.hp}")
+
+        elif self.u_type == "Spotter":
+            # extra vision handled in visibility phase: add position to visible map of team
+            pass
+
     def move_to(self, nx, ny, frame):
         # Forest slows by 1 turn after entering
         if terrain[ny][nx] == FOREST:
@@ -284,8 +331,9 @@ class Unit:
             if u.team == self.team:
                 continue
             if abs(u.x - self.x) + abs(u.y - self.y) <= 1:
-                u.hp -= self.dmg
-                print(f"Unit {self.uid} attacked {u.uid} for {self.dmg}. Target HP {u.hp}")
+                eff = int(self.dmg * (1 - getattr(u, 'dmg_reduction', 0)))
+                u.hp -= eff
+                print(f"Unit {self.uid} attacks {u.uid} for {eff} (raw {self.dmg})")
                 log_event(frame, self, "attack")
                 self.attack_cd = 5  # cooldown frames
                 if u.hp <= 0:
@@ -403,12 +451,16 @@ while running:
             if getattr(u, "team", team) != team:
                 continue
             origin = (u.x, u.y)
-            for x in range(origin[0] - FOG_RADIUS, origin[0] + FOG_RADIUS + 1):
-                for y in range(origin[1] - FOG_RADIUS, origin[1] + FOG_RADIUS + 1):
-                    if in_bounds((x, y)) and manhattan(origin, (x, y)) <= FOG_RADIUS:
+            vrad = FOG_RADIUS + 2 if u.u_type == "Spotter" else FOG_RADIUS
+            for x in range(origin[0] - vrad, origin[0] + vrad + 1):
+                for y in range(origin[1] - vrad, origin[1] + vrad + 1):
+                    if in_bounds((x, y)) and manhattan(origin, (x, y)) <= vrad:
                         visible[team].add((x, y))
 
     # ==== Update units ==========================
+    for u in units:
+        u.dmg_reduction = 0.0  # reset shield effect each frame
+
     for u in units[:]:
         u.update(frame, units, hqs, visible)
         if u.hp <= 0:
