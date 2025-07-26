@@ -6,6 +6,12 @@ WIDTH, HEIGHT = 800, 600
 TILE_SIZE = 20
 ROWS, COLS = HEIGHT // TILE_SIZE, WIDTH // TILE_SIZE
 
+# Game timing
+FPS = 30  # ticks per second (controls global speed)
+# Units will attempt to move every MOVE_INTERVAL_MIN to MOVE_INTERVAL_MAX frames
+MOVE_INTERVAL_MIN = FPS // 2   # 0.5 s
+MOVE_INTERVAL_MAX = FPS       # 1   s
+
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
@@ -21,8 +27,20 @@ class Unit:
         self.color = color
         self.hp = 100
         self.team = team
+        # Movement cooldown so units move slower & at varied cadence
+        self.move_cooldown = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX)
+        # Flash timer used when this unit just attacked
+        self.attack_flash = 0
+
+    def _reset_cooldown(self):
+        self.move_cooldown = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX)
 
     def move(self, units):
+        # Throttle movement speed
+        if self.move_cooldown > 0:
+            self.move_cooldown -= 1
+            return
+
         # Find enemy
         enemies = [u for u in units if u.team != self.team]
         if enemies:
@@ -51,14 +69,38 @@ class Unit:
             self.x = max(0, min(self.x, COLS - 1))
             self.y = max(0, min(self.y, ROWS - 1))
 
+        # Reset movement cooldown after attempting a move
+        self._reset_cooldown()
+
     def attack(self, units):
         for u in units:
             if u.team != self.team and u.x == self.x and u.y == self.y:
                 u.hp -= 10
+                # Trigger flash so we can highlight attacker
+                self.attack_flash = 5  # frames to highlight
                 break
 
     def draw(self):
-        pygame.draw.rect(screen, self.color, (self.x * TILE_SIZE, self.y * TILE_SIZE, TILE_SIZE, TILE_SIZE))
+        # Draw unit with optional flash highlight
+        draw_color = self.color
+        if self.attack_flash > 0:
+            # Lighten color for a brief moment to indicate attack
+            draw_color = tuple(min(255, c + 100) for c in self.color)
+            self.attack_flash -= 1
+
+        rect = pygame.Rect(self.x * TILE_SIZE, self.y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        pygame.draw.rect(screen, draw_color, rect)
+
+        # Health bar
+        hp_ratio = self.hp / 100
+        bar_width = TILE_SIZE
+        pygame.draw.rect(screen, (150, 0, 0), (rect.x, rect.y - 4, bar_width, 3))
+        pygame.draw.rect(screen, (0, 200, 0), (rect.x, rect.y - 4, bar_width * hp_ratio, 3))
+
+        # Optional letter to show unit type (all same type here, show 'I')
+        label = font.render('U', True, (255, 255, 255))
+        label_rect = label.get_rect(center=rect.center)
+        screen.blit(label, label_rect)
 
 units = []
 
@@ -77,6 +119,16 @@ frame = 0
 running = True
 while running:
     screen.fill((30, 30, 30))
+    # === Draw grid ===
+    grid_color = (60, 60, 60)
+    for x in range(COLS + 1):
+        pygame.draw.line(screen, grid_color, (x * TILE_SIZE, 0), (x * TILE_SIZE, HEIGHT))
+    for y in range(ROWS + 1):
+        pygame.draw.line(screen, grid_color, (0, y * TILE_SIZE), (WIDTH, y * TILE_SIZE))
+
+    # Midline divider
+    pygame.draw.line(screen, (200, 200, 200), (WIDTH // 2, 0), (WIDTH // 2, HEIGHT), 3)
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -119,6 +171,6 @@ while running:
         running = False
 
     pygame.display.flip()
-    clock.tick(60)
+    clock.tick(FPS)
 
 pygame.quit()
