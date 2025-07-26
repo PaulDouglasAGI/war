@@ -78,11 +78,15 @@ class Unit:
         # Morale & supply
         self.morale = 100
         self.unsupplied = False
+        self.is_commander = False  # set later for commander units
 
     def _reset_cd(self):
         global current_weather
         penalty = 2 if current_weather == 'rain' else 1
-        self.move_cd = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX) * penalty
+        base_interval = random.randint(MOVE_INTERVAL_MIN, MOVE_INTERVAL_MAX)
+        if getattr(self, 'aura_bonus', False):
+            base_interval = int(base_interval * 0.9)
+        self.move_cd = base_interval * penalty
 
     def attempt_move(self, units):
         # Morale based hesitation and fleeing
@@ -125,7 +129,7 @@ class Unit:
     def attempt_attack(self, units, log):
         for u in units:
             if u.team != self.team and u.x == self.x and u.y == self.y:
-                dmg = self.dmg
+                dmg = int(self.dmg * 1.25) if getattr(self, 'aura_bonus', False) else self.dmg
                 u.hp -= dmg
                 log.append(f"{self.describe()} attacked {u.describe()} for {dmg} dmg")
                 self.flash = 2
@@ -133,6 +137,11 @@ class Unit:
                     log.append(f"{u.describe()} was destroyed")
                     units.remove(u)
                     apply_nearby_death_morale(u)
+                    if u.is_commander:
+                        log.append(f"Commander of {u.team.upper()} has fallen! Morale decreased.")
+                        for ally in units:
+                            if ally.team == u.team:
+                                ally.morale = max(0, ally.morale - 30)
                     kills[self.team] += 1
                     print('\a', end='')  # beep on kill
                     # XP gain
@@ -197,25 +206,73 @@ HQ_MAX_HP = 300
 hq_hp = {'blue': HQ_MAX_HP, 'red': HQ_MAX_HP}
 
 def spawn_unit(team):
-    # spawn in left/right third depending on team, avoid occupied tiles
+    # spawn at or near barracks
+    bx, by = BARRACKS_POS[team]
     attempts = 20
     while attempts:
         attempts -= 1
-        if team == 'blue':
-            x = random.randint(0, LEFT_END)
-        else:
-            x = random.randint(MID_END + 1, WIDTH - 1)
-        y = random.randint(0, HEIGHT - 1)
-        if any(u.x == x and u.y == y for u in units):
+        offset_choices = [(0,0),(1,0),(-1,0),(0,1),(0,-1)]
+        dx, dy = random.choice(offset_choices)
+        x, y = bx+dx, by+dy
+        if not (0<=x<WIDTH and 0<=y<HEIGHT):
             continue
-        units.append(Unit(x, y, team))
-        print('\a', end='')  # beep on spawn
+        if any(u.x==x and u.y==y for u in units):
+            continue
+        units.append(Unit(x,y,team))
+        print('\a', end='')
         break
 
 # initial spawns
 for _ in range(5):
     spawn_unit('blue')
     spawn_unit('red')
+
+# === Commanders and Barracks ===
+
+def create_commander(team):
+    bx, by = HQ_POS[team]
+    cmd = Unit(bx, by, team, symbol='C')
+    cmd.is_commander = True
+    cmd.base_hp += 100
+    cmd.hp = cmd.base_hp
+    cmd.base_dmg += 5
+    cmd.dmg = cmd.base_dmg
+    units.append(cmd)
+
+create_commander('blue')
+create_commander('red')
+
+# Barracks position near HQ
+BARRACKS_POS = {
+    'blue': (HQ_POS['blue'][0]+1, HQ_POS['blue'][1]),
+    'red': (HQ_POS['red'][0]-1, HQ_POS['red'][1])
+}
+
+# Ensure terrain plain
+for pos in BARRACKS_POS.values():
+    terrain[pos[1]][pos[0]] = '.'
+
+# === Neutral Special Buildings ===
+BUILDINGS = []  # list of dicts: {'type': 'tower'/'factory', 'pos':(x,y), 'owner':None/'blue'/'red'}
+
+def place_building(b_type, symbol):
+    attempts = 100
+    while attempts:
+        attempts -= 1
+        x = random.randint(2, WIDTH-3)
+        y = random.randint(0, HEIGHT-1)
+        if (x,y) in HQ_POS.values() or (x,y) in BARRACKS_POS.values():
+            continue
+        if any(b['pos']==(x,y) for b in BUILDINGS):
+            continue
+        if terrain[y][x] != '.':
+            continue
+        BUILDINGS.append({'type': b_type, 'pos':(x,y), 'owner': None, 'symbol': symbol, 'capture_timer':0, 'capture_team': None})
+        break
+
+# Place one tower and one factory
+place_building('tower','T')
+place_building('factory','F')
 
 attack_log = []  # rolling log
 MAX_LOG_LINES = 5
@@ -277,6 +334,11 @@ def award_control_resources(frame):
                 count[owner] += 1
     for team in ('blue', 'red'):
         resources[team] += count[team]
+
+    # Factories give +1 res per sec
+    for b in BUILDINGS:
+        if b['type']=='factory' and b['owner']:
+            resources[b['owner']]+=1
 
 def check_hq_status(frame, log):
     # Attack HQ once per second
@@ -383,6 +445,37 @@ def update_supply_status(frame):
             if frame % FPS ==0:
                 u.hp -= 1
 
+# ===================== COMMANDER AURA ==================================
+
+def update_commander_aura():
+    commanders = [u for u in units if u.is_commander]
+    for u in units:
+        u.aura_bonus = False
+    for cmd in commanders:
+        for u in units:
+            if u.team == cmd.team and abs(u.x - cmd.x)+abs(u.y - cmd.y) <=2 and not u.is_commander:
+                u.aura_bonus = True
+
+# ===================== BUILDINGS CAPTURE & EFFECTS =====================
+
+def update_buildings(frame):
+    for b in BUILDINGS:
+        x,y = b['pos']
+        occupiers = [u for u in units if u.x==x and u.y==y]
+        if occupiers:
+            team = occupiers[0].team
+            if b['capture_team']==team:
+                b['capture_timer'] +=1
+            else:
+                b['capture_team']=team
+                b['capture_timer']=1
+            if b['owner']!=team and b['capture_timer']>=CAPTURE_FRAMES:
+                b['owner']=team
+                attack_log.append(f"{team.upper()} captured a {b['type'].upper()}!")
+        else:
+            b['capture_timer']=0
+            b['capture_team']=None
+
 # ===================== RENDERING =======================================
 
 def clear_screen():
@@ -434,6 +527,17 @@ def render(frame):
     for team, (hx, hy) in HQ_POS.items():
         icon = ('⛩' if team == 'blue' else '⚑')
         cell_strings[hy][hx] = TEAM_COLORS[team] + icon + Style.RESET_ALL
+
+    # Place Barracks
+    for team, (bx, by) in BARRACKS_POS.items():
+        cell_strings[by][bx] = TEAM_COLORS[team] + 'B' + Style.RESET_ALL
+
+    # Place special buildings
+    for b in BUILDINGS:
+        x,y = b['pos']
+        color = TEAM_COLORS[b['owner']] if b['owner'] else Fore.WHITE
+        cell_strings[y][x] = color + b['symbol'] + Style.RESET_ALL
+
     # Place unit trails (fade)
     for (tx, ty), remaining in list(trail.items()):
         if remaining <= 0:
@@ -498,6 +602,8 @@ try:
         update_weather(frame, attack_log) # Update weather
         update_morale() # Update morale
         update_supply_status(frame) # Update supply status
+        update_commander_aura() # Update commander aura
+        update_buildings(frame) # Update buildings
 
         for u in units[:]:
             if u.hp <= 0:
@@ -523,6 +629,17 @@ try:
                             vx, vy = u.x + dx, u.y + dy
                             if 0 <= vx < WIDTH and 0 <= vy < HEIGHT:
                                 visible.add((vx, vy))
+            # add tower vision
+            for b in BUILDINGS:
+                if b['type']=='tower' and b['owner']:
+                    if b['owner'] in ('blue','red'):
+                        bx, by = b['pos']
+                        for dx in range(-5,6):
+                            for dy in range(-5,6):
+                                if abs(dx)+abs(dy)<=5:
+                                    vx, vy = bx+dx, by+dy
+                                    if 0<=vx<WIDTH and 0<=vy<HEIGHT:
+                                        visible.add((vx,vy))
             # hide unseen unit positions by temporarily clearing their cell before render
             hidden_units = []
             for u in units:
