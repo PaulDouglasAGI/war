@@ -451,7 +451,10 @@ while running:
             if getattr(u, "team", team) != team:
                 continue
             origin = (u.x, u.y)
-            vrad = FOG_RADIUS + 2 if u.u_type == "Spotter" else FOG_RADIUS
+            if isinstance(u, Unit) and u.u_type == "Spotter":
+                vrad = FOG_RADIUS + 2
+            else:
+                vrad = FOG_RADIUS
             for x in range(origin[0] - vrad, origin[0] + vrad + 1):
                 for y in range(origin[1] - vrad, origin[1] + vrad + 1):
                     if in_bounds((x, y)) and manhattan(origin, (x, y)) <= vrad:
