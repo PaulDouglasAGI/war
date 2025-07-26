@@ -291,7 +291,10 @@ class Unit:
                 if u.hp <= 0:
                     print(f"Unit {u.uid} has been defeated.")
                     log_event(frame, u, "death")
-                    units.remove(u)
+                    if u in units:
+                        units.remove(u)
+                    else:
+                        print(f"Attempted double-remove of unit {u.uid}")
                 return True
         # Attack HQ
         enemy_hq = hqs["red" if self.team == "blue" else "blue"]
@@ -410,7 +413,10 @@ while running:
         u.update(frame, units, hqs, visible)
         if u.hp <= 0:
             add_floating("Unit Destroyed", u.x, u.y)
-            units.remove(u)
+            if u in units:
+                units.remove(u)
+            else:
+                print(f"Attempted double-remove of unit {u.uid}")
             log_event(frame, u, "death")
 
     # ==== Check HQ destruction ==================
