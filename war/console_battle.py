@@ -282,6 +282,9 @@ try:
         # trim logs
         if len(attack_log) > 100:
             attack_log[:] = attack_log[-100:]
+        # recompute unit counts for win check
+        blue_cnt = sum(1 for u in units if u.team == 'blue')
+        red_cnt = sum(1 for u in units if u.team == 'red')
         # === win check ===
         if blue_cnt == 0 or red_cnt == 0:
             winner = 'TEAM B' if blue_cnt == 0 else 'TEAM A'
