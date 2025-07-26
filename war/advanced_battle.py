@@ -162,7 +162,7 @@ class Unit:
         start = (self.x, self.y)
         q = deque([start])
         came = {start: None}
-        occupied = {(u.x, u.y) for u in units if u is not self}
+        occupied_start = {(u.x, u.y) for u in units if u is not self}
         while q:
             cur = q.popleft()
             if cur in goals:
@@ -178,7 +178,8 @@ class Unit:
                     continue
                 if terrain[ny][nx] == WALL:
                     continue
-                if (nx, ny) in occupied:
+                # Only block occupied tiles if they would be our immediate next step
+                if cur == start and (nx, ny) in occupied_start:
                     continue
                 came[(nx, ny)] = cur
                 q.append((nx, ny))
@@ -230,6 +231,11 @@ class Unit:
         for _ in range(self.speed):  # Scouts move twice
             step = self.bfs(target_pos, units)
             if step:
+                if any(u.x == step[0] and u.y == step[1] for u in units):
+                    # Next tile is occupied; wait this turn
+                    # Optional debug
+                    # print(f"[{self.team}] Unit at {(self.x,self.y)} path blocked at {step}")
+                    break
                 self.move_to(*step, frame)
             # Attack if on same tile
             attacked = self.attack(units, hqs, frame)
