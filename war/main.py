@@ -1,16 +1,20 @@
 """Unified entry script.
 
-This file now delegates execution to the fully-featured console simulator
-implemented in `console_battle.py`.  All previous pygame demo code has been
-retained below (commented) for reference but is no longer executed.
+This file delegates execution to either the console or graphical (Pygame)
+implementation depending on command-line flags.
+
+Usage:
+    python main.py            # run graphical advanced_battle (pygame)
+    python main.py --console  # run ANSI/Colorama console_battle
 """
 
-from console_battle import *  # noqa: F401,F403 – execute on import
+import sys
 
+if __name__ == "__main__":
+    if "--console" in sys.argv:
+        from console_battle import *  # noqa: F401,F403 – executes console loop on import
+    else:
+        from advanced_battle import *  # noqa: F401,F403 – executes pygame loop on import
 
-# ================= OLD PYGAME DEMO (disabled) ==========================
-# The original pygame demo has been commented out to avoid clashing with the
-# new, feature-rich console version.  Uncomment and run manually if desired.
-#
-# if __name__ == "__main__":
-#     # Original graphical demo preserved here ...
+# Note: the original simple pygame demo remains below (commented out) for
+# historical reference. It is not executed unless manually uncommented.
