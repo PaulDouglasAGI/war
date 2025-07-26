@@ -426,7 +426,24 @@ while running:
             resources[team] += 1
             affordable = [t for t, v in UNIT_TYPES.items() if v["cost"] <= resources[team]]
             if affordable:
-                u_type = random.choice(affordable)
+                frontline = ["Infantry", "Tank"]
+                support = ["Shieldbearer", "Medic", "BarrierEng", "RepairBot"]
+                scout = ["Scout", "Spotter"]
+
+                def base_weight(t):
+                    if t in frontline:
+                        return 0.4 / len(frontline)
+                    if t in support:
+                        return 0.3 / len(support)
+                    if t in scout:
+                        return 0.3 / len(scout)
+                    return 0.1
+
+                weights = [base_weight(t) for t in affordable]
+                # normalize
+                total = sum(weights)
+                weights = [w/total for w in weights]
+                u_type = random.choices(affordable, weights=weights, k=1)[0]
                 # attempt spawn near HQ within 2 tiles
                 hq = hqs[team]
                 spawn_candidates = []
